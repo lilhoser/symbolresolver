@@ -16,6 +16,9 @@ KIND, either express or implied.  See the License for the
 specific language governing permissions and limitations
 under the License.
 */
+using System;
+using System.Threading.Tasks;
+using System.Linq;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using System.Diagnostics;
 using symbolresolver;
@@ -29,7 +32,7 @@ namespace UnitTests
         private readonly string s_SymbolPath = @"srv*c:\symbols*https://msdl.microsoft.com/download/symbols";
 
         [TestMethod]
-        public void Basic()
+        public async Task Basic()
         {
             //
             // Pick a suitable user-mode process.
@@ -80,20 +83,17 @@ namespace UnitTests
             Assert.AreNotEqual(0, pid);
             Assert.AreNotEqual(0UL, address);
 
-            SymbolResolver resolver = null;
             try
             {
-                resolver = new SymbolResolver(s_SymbolPath, s_DbgHelpLocation);
-                resolver.Initialize();
-                resolver.InitializeForProcess(pid);
+                var resolver = new SymbolResolver(s_SymbolPath, s_DbgHelpLocation);
+                Assert.IsTrue(await resolver.Initialize());
+                Assert.IsNotNull(await resolver.ResolveUserAddress(
+                    pid, address, SymbolFormattingOption.SymbolAndModule));
             }
             catch (InvalidOperationException ex)
             {
-                Assert.Fail($"Unable to init SymbolResolver: {ex.Message}");
+                Assert.Fail($"SymbolResolver exception: {ex.Message}");
             }
-
-            var result = resolver.GetFormattedSymbol(address);
-            Assert.IsTrue(!string.IsNullOrEmpty(result));
         }
     }
 }

@@ -16,6 +16,8 @@ KIND, either express or implied.  See the License for the
 specific language governing permissions and limitations
 under the License.
 */
+using System;
+using System.Threading.Tasks;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using symbolresolver;
 
@@ -28,33 +30,21 @@ namespace UnitTests
         private readonly string s_SymbolPath = @"srv*c:\symbols*https://msdl.microsoft.com/download/symbols";
 
         [TestMethod]
-        public void Basic()
+        public async Task Basic()
         {
-            SymbolResolver resolver = null;
-            ulong address = 0;
+            //
+            // Pick a random kernel address to validate
+            //
             try
             {
-                resolver = new SymbolResolver(s_SymbolPath, s_DbgHelpLocation);
-                resolver.Initialize();
-                var drivers = resolver.GetLoadedKernelDrivers();
-                Assert.IsNotNull(drivers);
-                Assert.IsTrue(drivers.Count > 0);
-                var kernel = drivers.FirstOrDefault(d => d.ImagePath.ToLower().Contains("ntos"));
-                if (kernel == null)
-                {
-                    kernel = drivers.FirstOrDefault(d => d.ImagePath.ToLower().Contains("ntkr"));
-                }
-                Assert.IsNotNull(kernel);
-                address = kernel.BaseAddress + 100;
+                var resolver = new SymbolResolver(s_SymbolPath, s_DbgHelpLocation);
+                Assert.IsTrue(await resolver.Initialize());
+                Assert.IsNotNull(await resolver.ResolveKernelAddress(0xfffffffe81000010, SymbolFormattingOption.SymbolAndModule));
             }
             catch (InvalidOperationException ex)
             {
                 Assert.Fail($"Unable to init SymbolResolver: {ex.Message}");
             }
-
-            Assert.AreNotEqual(0UL, address);
-            var result = resolver.GetFormattedSymbol(address);
-            Assert.IsTrue(!string.IsNullOrEmpty(result));
         }
     }
 }

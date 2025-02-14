@@ -25,47 +25,51 @@ namespace symbolresolver
     using static NativeDefinitions;
     using static TraceLogger;
 
-    public class SymbolResolver
+    internal class CachedSymbol
+    {
+        public CachedSymbol(ulong address, string resolved)
+        {
+            Address = address;
+            ResolvedSymbol = resolved;
+        }
+        public ulong Address;
+        public string ResolvedSymbol;
+    }
+
+    public class SymbolResolver : IDisposable
     {
         private nint m_SymHandle; // NOT a process handle!
         private string m_DebuggerToolsPath;
         private string m_SymbolPath;
-        private Dictionary<ulong, string> m_SymbolCache;
-        private List<ulong> m_LoadedModules;
-        private List<LoadedDriver> m_LoadedDrivers;
-
-        public class LoadedDriver
-        {
-            public string ImagePath;
-            public ulong BaseAddress;
-            public uint Size;
-            public nint hModule;
-        }
+        private Dictionary<int, List<CachedSymbol>> m_SymbolCache;
+        private bool m_Disposed;
+        private KernelSymbolResolver m_KernelResolver;
+        private UserSymbolResolver m_UserResolver;
 
         public
         SymbolResolver(string SymbolPath, string DebuggerToolsPath)
         {
             m_SymbolPath = SymbolPath;
-            m_SymbolCache = new Dictionary<ulong, string>();
+            m_SymbolCache = new Dictionary<int, List<CachedSymbol>>();
             m_DebuggerToolsPath = DebuggerToolsPath;
-            m_LoadedModules = new List<ulong>();
-            m_LoadedDrivers = new List<LoadedDriver>();
+            m_KernelResolver = new KernelSymbolResolver();
+            m_UserResolver = new UserSymbolResolver();
+            m_SymHandle = nint.Zero;
         }
 
         ~SymbolResolver()
         {
-            Trace(TraceLoggerType.Resolver,
-                 TraceEventType.Verbose,
-                  "Entered destructor");
-            foreach (var module in m_LoadedModules)
+            Dispose(false);            
+        }
+
+        protected virtual void Dispose(bool disposing)
+        {
+            if (m_Disposed)
             {
-                SymUnloadModule64(m_SymHandle, module);
+                return;
             }
 
-            foreach (var driver in m_LoadedDrivers)
-            {
-                FreeLibrary(driver.hModule);
-            }
+            m_Disposed = true;
 
             if (m_SymHandle != nint.Zero)
             {
@@ -73,35 +77,43 @@ namespace symbolresolver
             }
         }
 
-        public
-        void
-        Initialize()
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        public async Task<bool> Initialize()
         {
             if (m_SymHandle != nint.Zero)
             {
-                return;
+                Debug.Assert(false);
+                return true;
             }
 
             Trace(TraceLoggerType.Resolver,
                   TraceEventType.Information,
-                  $"Initializing resolver");
+                  $"Initializing symbol resolver");
 
             //
-            // Preload driver modules using LoadLibraryEx to force sym API to recognize it.
+            // Load driver modules using LoadLibraryEx to force sym API to recognize it.
             //
-            LoadAllKernelModules();
+            if (!await m_KernelResolver.Preload())
+            {
+                Trace(TraceLoggerType.Resolver,
+                      TraceEventType.Error,
+                      $"Failed to pre-initialize kernel resolver");
+                return false;
+            }
 
             //
             // Use dbghelp.dll and friends from debugger tools
             //
             if (!SetDllDirectory(m_DebuggerToolsPath))
             {
-                var err = $"Unable to set dll directory: " +
-                    $"{Marshal.GetLastWin32Error():X}";
-                Trace(TraceLoggerType.Resolver,
-                      TraceEventType.Error,
-                      err);
-                throw new Exception(err);
+                var err = $"Unable to set dll directory: 0x{Marshal.GetLastWin32Error():X}";
+                Trace(TraceLoggerType.Resolver, TraceEventType.Error, err);
+                return false;
             }
 
             Trace(TraceLoggerType.Resolver,
@@ -114,15 +126,11 @@ namespace symbolresolver
                          SYMOPT_CASE_INSENSITIVE |
                          SYMOPT_DEFERRED_LOADS |
                          SSYMOPT_INCLUDE_32BIT_MODULES;
-
             if (SymSetOptions(flags) != flags)
             {
-                var err = $"SymSetOptions failed:  " +
-                    $"0x{Marshal.GetLastWin32Error():X}";
-                Trace(TraceLoggerType.Resolver,
-                      TraceEventType.Error,
-                      err);
-                throw new Exception(err);
+                var err = $"SymSetOptions failed: 0x{Marshal.GetLastWin32Error():X}";
+                Trace(TraceLoggerType.Resolver, TraceEventType.Error, err);
+                return false;
             }
 
             Trace(TraceLoggerType.Resolver,
@@ -137,24 +145,26 @@ namespace symbolresolver
             m_SymHandle = new nint(r.NextInt64());
             if (!SymInitialize(m_SymHandle, m_SymbolPath, false))
             {
-                    var err = $"SymInitialize failed:  " +
-                        $"0x{Marshal.GetLastWin32Error():X}";
-                    Trace(TraceLoggerType.Resolver,
-                          TraceEventType.Error,
-                          err);
-                    throw new Exception(err);
+                var err = $"SymInitialize failed: 0x{Marshal.GetLastWin32Error():X}";
+                Trace(TraceLoggerType.Resolver, TraceEventType.Error, err);
+                return false;
             }
 
-            Trace(TraceLoggerType.Resolver,
-                  TraceEventType.Information,
-                  $"SymInitialize complete");
+            Trace(TraceLoggerType.Resolver, TraceEventType.Information, $"SymInitialize complete");
+
+            m_KernelResolver.SetSymHandle(m_SymHandle);
+            m_UserResolver.SetSymHandle(m_SymHandle);
 
             //
-            // Now SymLoadModuleEx on kernel modules.
+            // Now SymLoadModuleEx on kernel modules. This only needs to be done once,
+            // as opposed to user modules that are per-process.
             //
-            foreach (var driver in m_LoadedDrivers)
+            if (!await m_KernelResolver.Load())
             {
-                LoadModule(driver.ImagePath, driver.BaseAddress, driver.Size);
+                Trace(TraceLoggerType.Resolver,
+                      TraceEventType.Error,
+                      $"Failed to initialize kernel resolver");
+                return false;
             }
 
             //
@@ -201,9 +211,7 @@ namespace symbolresolver
                             }
                     }
 
-                    Trace(TraceLoggerType.Dbghelp,
-                            TraceEventType.Information,
-                            message);
+                    Trace(TraceLoggerType.Dbghelp, TraceEventType.Information, message);
                     return true;
                 },
                 nint.Zero))
@@ -212,536 +220,63 @@ namespace symbolresolver
                       TraceEventType.Error,
                       $"SymRegisterCallback64 failed: 0x{Marshal.GetLastWin32Error():X}");
             }
+            return true;
         }
 
-        public
-        void
-        InitializeForProcess(int ProcessId)
-        {
-            if (m_SymHandle == nint.Zero)
-            {
-                throw new Exception("SymbolResolver is not initialized");
-            }
-            LoadAllUserModules(ProcessId);
-        }
-
-        public
-        string?
-        GetFormattedSymbol(ulong Address)
-        {
-            if (m_SymHandle == nint.Zero)
-            {
-                throw new Exception("SymbolResolver is not initialized");
-            }
-
-            var moduleInfo = GetModuleInfo(Address);
-            string moduleName = "<unknown_module>";
-            if (!string.IsNullOrEmpty(moduleInfo.ModuleName))
-            {
-                moduleName = moduleInfo.ModuleName;
-            }
-
-            var formatted = moduleName;
-            var symbol = SymbolFromAddress(Address);
-
-            if (!string.IsNullOrEmpty(symbol))
-            {
-                formatted += $"!{symbol}";
-            }
-            else
-            {
-                formatted += $"!<unknown_0x{Address:X}>";
-            }
-
-            return formatted;
-        }
-
-        public
-        string?
-        SymbolFromAddress(
-            ulong Address
+        public async Task<string?> ResolveUserAddress(
+            int ProcessId,
+            ulong Address, 
+            SymbolFormattingOption Format,
+            SymbolResolverFlags Flags = SymbolResolverFlags.None
             )
         {
             if (m_SymHandle == nint.Zero)
             {
-                throw new Exception("SymbolResolver is not initialized");
+                Debug.Assert(false);
+                return null;
             }
 
-            if (m_SymbolCache.ContainsKey(Address))
+            if (m_SymbolCache.ContainsKey(ProcessId))
             {
-                Trace(TraceLoggerType.Resolver,
-                      TraceEventType.Information,
-                      $"Symbol 0x{Address:X} = {m_SymbolCache[Address]} (cached)");
-                return m_SymbolCache[Address];
-            }
-
-            nint buffer = nint.Zero;
-            string? resolved = null;
-
-            try
-            {
-                ulong displacement = 0;
-                var symbol = new SYMBOL_INFO();
-                symbol.MaxNameLen = MAX_SYM_NAME;
-                symbol.SizeOfStruct = (uint)Marshal.SizeOf(typeof(SYMBOL_INFO));
-                buffer = Marshal.AllocHGlobal((int)(symbol.SizeOfStruct + MAX_SYM_NAME));
-                if (buffer == nint.Zero)
+                var match = m_SymbolCache[ProcessId].FirstOrDefault(s => s.Address == Address);
+                if (match != default)
                 {
-                    throw new Exception("Out of memory");
-                }
-
-                Marshal.StructureToPtr(symbol, buffer, false);
-
-                if (!SymFromAddr(m_SymHandle, Address, ref displacement, buffer))
-                {
-                    var code = Marshal.GetLastWin32Error();
                     Trace(TraceLoggerType.Resolver,
-                          TraceEventType.Warning,
-                          $"Unable to resolve symbol at address 0x{Address:X}: 0x{code:X}");
-                    //
-                    // This might not be catastrophic, so don't throw an exception
-                    //
-                    return null;
+                          TraceEventType.Information,
+                          $"Symbol 0x{Address:X} = {match.ResolvedSymbol} (cached)");
+                    return match.ResolvedSymbol;
                 }
-
-                symbol = (SYMBOL_INFO)Marshal.PtrToStructure(buffer, typeof(SYMBOL_INFO))!;
-                var nameLenCharacters = (int)symbol.NameLen; // not incl. null-term
-
-                if (nameLenCharacters == 0)
-                {
-                    throw new Exception("Symbol name length was 0!");
-                }
-
-                //
-                // Marshal the name buffer, which is just after the last field in SYMBOL_INFO.
-                // TODO: Add in displacement, if available.
-                //
-                var nameLenBytes = nameLenCharacters * 2; // Unicode
-                byte[] nameData = new byte[nameLenBytes];
-                var pointer = nint.Add(buffer, (int)Marshal.OffsetOf<SYMBOL_INFO>("Dummy"));
-                Marshal.Copy(pointer, nameData, 0, nameLenBytes);
-                resolved = Encoding.Unicode.GetString(nameData, 0, nameLenBytes);
-
-                Trace(TraceLoggerType.Resolver,
-                      TraceEventType.Information,
-                      $"Symbol 0x{Address:X} = {resolved}");
             }
-            finally
+            else
             {
-                if (buffer != nint.Zero)
-                {
-                    Marshal.FreeHGlobal(buffer);
-                }
+                m_SymbolCache.Add(ProcessId, new List<CachedSymbol>());
             }
 
+            var resolved = await m_UserResolver.Resolve(ProcessId, Address, Format, Flags);
             if (!string.IsNullOrEmpty(resolved))
             {
-                m_SymbolCache.Add(Address, resolved);
+                m_SymbolCache[ProcessId].Add(new CachedSymbol(Address, resolved));
             }
-
             return resolved;
         }
 
-        public
-        List<LoadedDriver>
-        GetLoadedKernelDrivers()
-        {
-            return m_LoadedDrivers;
-        }
-
-        private
-        IMAGEHLP_MODULE64
-        GetModuleInfo(ulong Address)
+        public async Task<string?> ResolveKernelAddress(
+            ulong Address,
+            SymbolFormattingOption Format,
+            SymbolResolverFlags Flags = SymbolResolverFlags.None
+            )
         {
             if (m_SymHandle == nint.Zero)
             {
-                throw new Exception("SymbolResolver is not initialized");
-            }
-
-            var moduleInfo = new IMAGEHLP_MODULE64();
-            moduleInfo.SizeOfStruct = (uint)Marshal.SizeOf(typeof(IMAGEHLP_MODULE64));
-            var buffer = Marshal.AllocHGlobal((int)(moduleInfo.SizeOfStruct));
-            if (buffer == nint.Zero)
-            {
-                throw new Exception("Out of memory");
-            }
-
-            try
-            {
-                Marshal.StructureToPtr(moduleInfo, buffer, false);
-
-                if (!SymGetModuleInfo(m_SymHandle, Address, buffer))
-                {
-                    //
-                    // Similar to SymFromAddr, this API can fail for a host of reasons.
-                    // We'll trace an error, but no exception.
-                    //
-                    var err = $"SymGetModuleInfo failed: 0x{Marshal.GetLastWin32Error():X}";
-                    Trace(TraceLoggerType.Resolver,
-                          TraceEventType.Error,
-                          err);
-                    return moduleInfo;
-                }
-
-                moduleInfo = (IMAGEHLP_MODULE64)Marshal.PtrToStructure(
-                    buffer, typeof(IMAGEHLP_MODULE64))!;
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(buffer);
-            }
-
-            return moduleInfo;
-        }
-
-        private
-        void
-        LoadAllUserModules(int ProcessId)
-        {
-            if (m_SymHandle == nint.Zero)
-            {
-                throw new Exception("SymbolResolver is not initialized");
+                Debug.Assert(false);
+                return null;
             }
 
             //
-            // We have to open a handle to the process to get its loaded module list.
-            // SymInitialize would also do the same thing with invasive mode.
+            // No cache needed in front of kernel addresses, because these are one-time/global
+            // addresses and symbols.
             //
-            nint handle;
-
-            Trace(TraceLoggerType.Resolver,
-                  TraceEventType.Information,
-                  $"Opening target process {ProcessId}");
-
-            try
-            {
-                handle = OpenProcess(PROCESS_ALL_ACCESS, false, (uint)ProcessId);
-            }
-            catch (Exception ex)
-            {
-                var err = $"Unable to open process ID {ProcessId}: {ex.Message}";
-                Trace(TraceLoggerType.Resolver,
-                      TraceEventType.Error,
-                      err);
-                throw new Exception(err);
-            }
-
-            if (ProcessId == nint.Zero)
-            {
-                var code = Marshal.GetLastWin32Error();
-                if (code == 0x5)
-                {
-                    //
-                    // Wrap this up separately so caller can handle it explicitly if desired.
-                    //
-                    var err = $"Unable to open process ID {ProcessId}: access is denied";
-                    Trace(TraceLoggerType.Resolver,
-                          TraceEventType.Error,
-                          err);
-                    throw new AccessViolationException(err);
-                }
-                else if (code == 0x57)
-                {
-                    //
-                    // The process likely isn't running - this can happen if the source
-                    // of our requestor is from an ETW containing a PID from a terminated
-                    // process, as an example.
-                    //
-                    throw new InvalidOperationException($"Process {ProcessId} doesn't exist");
-                }
-                else
-                {
-                    var err = $"Unable to open process ID {ProcessId}:  0x{code:X}";
-                    Trace(TraceLoggerType.Resolver,
-                          TraceEventType.Error,
-                          err);
-                    throw new Exception(err);
-                }
-            }
-
-            try
-            {
-                //
-                // Enumerate all modules in this process
-                //
-                if (!IsWow64Process(handle, out bool isWow64))
-                {
-                    var err = $"IsWow64Process failed:  " +
-                        $"0x{Marshal.GetLastWin32Error():X}";
-                    Trace(TraceLoggerType.Resolver,
-                          TraceEventType.Error,
-                          err);
-                    throw new Exception(err);
-                }
-
-                Trace(TraceLoggerType.Resolver,
-                      TraceEventType.Information,
-                      $"Enumerating modules for process");
-
-                var modules = new nint[1024];
-                var size = modules.Length * nint.Size;
-                var modFilter = isWow64 ? EnumProcessModulesFilter.LIST_MODULES_32BIT : EnumProcessModulesFilter.LIST_MODULES_64BIT;
-
-                if (!EnumProcessModulesEx(handle, modules, size, out int numModules, modFilter))
-                {
-                    var err = $"EnumProcessModulesEx failed:  " +
-                        $"0x{Marshal.GetLastWin32Error():X}";
-                    Trace(TraceLoggerType.Resolver,
-                          TraceEventType.Error,
-                          err);
-                    throw new Exception(err);
-                }
-
-                if (numModules == 0)
-                {
-                    //
-                    // Likely a frozen/suspended UWP process.
-                    //
-                    throw new InvalidOperationException($"Process {ProcessId} has no loaded modules");
-                }
-
-                foreach (var module in modules.Take(numModules / nint.Size))
-                {
-                    var buffer = Marshal.AllocHGlobal(1024);
-                    if (buffer == nint.Zero)
-                    {
-                        throw new Exception("Out of memory");
-                    }
-
-                    var fileNameSize = GetModuleFileNameEx(handle, module, buffer, 1024);
-                    if (fileNameSize == 0)
-                    {
-                        Marshal.FreeHGlobal(buffer);
-                        var err = $"GetModuleFileNameEx failed:  " +
-                            $"0x{Marshal.GetLastWin32Error():X}";
-                        Trace(TraceLoggerType.Resolver,
-                              TraceEventType.Error,
-                              err);
-                        throw new Exception(err);
-                    }
-
-                    var fileName = Marshal.PtrToStringUni(buffer);
-                    Marshal.FreeHGlobal(buffer);
-
-                    //
-                    // Get load address and size.
-                    //
-                    size = Marshal.SizeOf(typeof(MODULE_INFO));
-                    buffer = Marshal.AllocHGlobal(size);
-                    if (buffer == nint.Zero)
-                    {
-                        throw new Exception("Out of memory");
-                    }
-
-                    if (!GetModuleInformation(handle, module, buffer, (uint)size))
-                    {
-                        Marshal.FreeHGlobal(buffer);
-                        var err = $"GetModuleInformation failed for {fileName}:  " +
-                            $"0x{Marshal.GetLastWin32Error():X}";
-                        Trace(TraceLoggerType.Resolver,
-                              TraceEventType.Error,
-                              err);
-                        throw new Exception(err);
-                    }
-
-                    var modInfo = (MODULE_INFO)Marshal.PtrToStructure(
-                        buffer, typeof(MODULE_INFO))!;
-                    var baseAddress = modInfo.BaseOfDll;
-                    var imageSize = modInfo.SizeOfImage;
-                    Marshal.FreeHGlobal(buffer);
-
-                    if (baseAddress == 0 || imageSize == 0)
-                    {
-                        //
-                        // This happens with modules loaded as data/image files.
-                        //
-                        var err = $"The module {fileName} in the process has invalid " +
-                            $"base address ({baseAddress} or size ({imageSize})";
-                        Trace(TraceLoggerType.Resolver,
-                              TraceEventType.Error,
-                              err);
-                        continue;
-                    }
-
-                    LoadModule(fileName, (ulong)baseAddress.ToInt64(), imageSize);
-                    m_LoadedModules.Add((ulong)baseAddress.ToInt64());
-                }
-            }
-            finally
-            {
-                CloseHandle(handle);
-            }
-        }
-
-        private
-        void
-        LoadAllKernelModules()
-        {
-            Trace(TraceLoggerType.Resolver,
-                  TraceEventType.Information,
-                  $"Loading all kernel modules");
-
-            var result = IsWow64Process(Process.GetCurrentProcess().Handle, out bool isWow64);
-            Debug.Assert(result && !isWow64);
-
-            //
-            // Use Zw API to get full driver information including base and size.
-            // For simplicity, we'll allocate a large enough buffer for 1024 drivers.
-            //
-            var size = Marshal.SizeOf(typeof(SYSTEM_MODULE_INFORMATION)) * 1024;
-            var buffer = Marshal.AllocHGlobal(size);
-            if (buffer == nint.Zero)
-            {
-                throw new Exception("Out of memory");
-            }
-
-            var status = ZwQuerySystemInformation(
-                SYSTEM_INFORMATION_CLASS.SystemModuleInformation,
-                buffer,
-                (uint)size,
-                out uint _);
-            if (status != 0)
-            {
-                Marshal.FreeHGlobal(buffer);
-                throw new Exception($"ZwQuerySystemInformation failed: 0x{status:X}");
-            }
-            var numModules = Marshal.ReadInt32(buffer);
-            if (numModules == 0)
-            {
-                Marshal.FreeHGlobal(buffer);
-                throw new Exception("No driver modules found.");
-            }
-
-            Trace(TraceLoggerType.Resolver,
-                  TraceEventType.Information,
-                  $"There are {numModules} kernel modules");
-
-            var pointer = nint.Add(buffer, 8); // aligned on 8-byte boundary
-
-            try
-            {
-                for (int i = 0; i < numModules; i++)
-                {
-                    var module = (SYSTEM_MODULE_INFORMATION)Marshal.PtrToStructure(
-                        pointer, typeof(SYSTEM_MODULE_INFORMATION))!;
-                    if (string.IsNullOrEmpty(module.ImageName))
-                    {
-                        Trace(TraceLoggerType.Resolver,
-                              TraceEventType.Warning,
-                              $"Skipping unnamed module at load address 0x{module.ImageBase:X}");
-                        continue;
-                    }
-
-                    //
-                    // Normalize driver path
-                    //
-                    var driverPath = module.ImageName.ToLower();
-
-                    if (driverPath.StartsWith(@"\systemroot\"))
-                    {
-                        driverPath = driverPath.Replace(@"\systemroot",
-                            Environment.GetEnvironmentVariable("SystemRoot"));
-                    }
-                    else if (driverPath.StartsWith(@"\??\"))
-                    {
-                        driverPath = driverPath.Remove(0, 4);
-                    }
-
-                    var driverName = Path.GetFileName(driverPath);
-                    if (driverName.StartsWith("dump_"))
-                    {
-                        //
-                        // These don't really exist on disk.
-                        //
-                        Trace(TraceLoggerType.Resolver,
-                              TraceEventType.Information,
-                              $"Skipping virtual dump driver at load address "+
-                              $"0x{module.ImageBase:X}");
-                        continue;
-                    }
-
-                    Debug.Assert(File.Exists(driverPath));
-
-                    //
-                    // Important: We use LoadLibraryEx ourselves instead of calling
-                    // SymLoadModuleEx, which doesn't appear to work.
-                    //
-                    var handle = LoadLibraryEx(driverPath,
-                        nint.Zero,
-                        LOAD_LIBRARY_AS_IMAGE_RESOURCE | LOAD_LIBRARY_AS_DATAFILE_EXCLUSIVE);
-                    if (handle == nint.Zero)
-                    {
-                        var err = $"LoadLibraryEx failed: 0x{Marshal.GetLastWin32Error():X}";
-                        Trace(TraceLoggerType.Resolver, TraceEventType.Error, err);
-                        throw new Exception(err);
-                    }
-
-                    m_LoadedDrivers.Add(new LoadedDriver
-                    {
-                        hModule = handle,
-                        ImagePath = driverPath,
-                        BaseAddress = (ulong)module.ImageBase.ToInt64(),
-                        Size = module.Size
-                    });
-
-                    pointer = nint.Add(pointer,
-                        Marshal.SizeOf(typeof(SYSTEM_MODULE_INFORMATION)));
-                }
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(buffer);
-            }
-        }
-
-        private
-        void
-        LoadModule(string Path, ulong Base, uint Size)
-        {
-            if (m_SymHandle == nint.Zero)
-            {
-                throw new Exception("SymbolResolver is not initialized");
-            }
-
-            Trace(TraceLoggerType.Resolver,
-                  TraceEventType.Information,
-                  $"Loading module {Path} (Base=0x{Base:X}, size={Size})");
-
-            var baseAddress = SymLoadModuleEx(m_SymHandle,
-                nint.Zero,
-                Path,
-                null,
-                Base,
-                Size,
-                nint.Zero,
-                0);
-            if (baseAddress == 0)
-            {
-                var code = Marshal.GetLastWin32Error();
-                if (code != 0)
-                {
-                    var err = $"SymLoadModuleEx failed: 0x{code:X}";
-                    Trace(TraceLoggerType.Resolver,
-                          TraceEventType.Error,
-                          err);
-                    throw new Exception(err);
-                }
-
-                //
-                // Module was already loaded.
-                //
-                return;
-            }
-
-            //
-            // Since we have deferred symbol load option set, force load now by
-            // referencing a symbol.
-            //
-            var moduleInfo = GetModuleInfo(Base + 1);
-            if (string.IsNullOrEmpty(moduleInfo.ModuleName))
-            {
-                throw new Exception($"Unable to resolve address 0x{(Base + 1):X} in module");
-            }
+            return await m_KernelResolver.Resolve(Address, Format, Flags);
         }
     }
 }
