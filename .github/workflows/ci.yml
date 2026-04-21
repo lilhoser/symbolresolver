@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: Build & Test (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          # symbolresolver v2 targets net10.0-windows7.0. Don't pin a specific
+          # patch — the runner already ships a compatible SDK.
+          dotnet-version: '10.x'
+          dotnet-quality: 'preview'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
+      - name: Restore
+        run: dotnet restore symbolresolver.sln
+
+      - name: Build
+        run: dotnet build symbolresolver.sln --configuration Release --no-restore /p:EnableTrimAnalyzer=true /p:IsAotCompatible=true
+
+      - name: Test
+        run: dotnet test UnitTests/UnitTests.csproj --configuration Release --no-build --verbosity normal --logger "trx;LogFileName=symbolresolver-tests.trx"
+        env:
+          # Runner may not have the Windows SDK Debuggers installed at the
+          # default path; the test fixture falls back to C:\Windows\System32
+          # if this variable is unset.
+          SYMBOLRESOLVER_DBGHELP_DIR: ''
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: symbolresolver-test-results
+          path: UnitTests/TestResults/**/*.trx
+          if-no-files-found: ignore
