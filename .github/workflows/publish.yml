@@ -1,0 +1,93 @@
+name: Publish
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build the package but skip nuget push'
+        type: boolean
+        default: false
+
+jobs:
+  publish:
+    name: Pack & push to nuget.org
+    runs-on: windows-latest
+    timeout-minutes: 20
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.x'
+          dotnet-quality: 'preview'
+
+      - name: Resolve version
+        id: version
+        shell: pwsh
+        run: |
+          $csproj = [xml](Get-Content symbolresolver.csproj)
+          $projectVersion = $csproj.Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+          Write-Host "csproj version: $projectVersion"
+
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $tagVersion = $env:GITHUB_REF.Substring('refs/tags/v'.Length)
+            Write-Host "tag version:    $tagVersion"
+            if ($tagVersion -ne $projectVersion) {
+              Write-Error "Tag version ($tagVersion) does not match csproj version ($projectVersion). Update symbolresolver.csproj <Version> before tagging."
+              exit 1
+            }
+          }
+
+          "version=$projectVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Restore
+        run: dotnet restore symbolresolver.sln
+
+      - name: Build
+        run: dotnet build symbolresolver.sln --configuration Release --no-restore /p:EnableTrimAnalyzer=true /p:IsAotCompatible=true
+
+      - name: Test (library tests must pass before we ship)
+        run: dotnet test UnitTests/UnitTests.csproj --configuration Release --no-build --verbosity normal
+
+      - name: Locate package
+        id: package
+        shell: pwsh
+        run: |
+          $pkg = Get-ChildItem -Path bin/Release -Filter "symbolresolver.${{ steps.version.outputs.version }}.nupkg" -Recurse | Select-Object -First 1
+          if (-not $pkg) {
+            Write-Error "Could not find symbolresolver.${{ steps.version.outputs.version }}.nupkg under bin/Release"
+            exit 1
+          }
+          Write-Host "Package: $($pkg.FullName)"
+          "path=$($pkg.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: symbolresolver-${{ steps.version.outputs.version }}
+          path: ${{ steps.package.outputs.path }}
+          if-no-files-found: error
+
+      - name: Push to nuget.org
+        if: ${{ inputs.dry_run != true }}
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        shell: pwsh
+        run: |
+          if (-not $env:NUGET_API_KEY) {
+            Write-Error "NUGET_API_KEY secret is not configured in this repo. Add it under Settings -> Secrets and variables -> Actions."
+            exit 1
+          }
+          dotnet nuget push "${{ steps.package.outputs.path }}" `
+            --source https://api.nuget.org/v3/index.json `
+            --api-key $env:NUGET_API_KEY `
+            --skip-duplicate
