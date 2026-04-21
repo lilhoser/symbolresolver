@@ -222,7 +222,7 @@ namespace symbolresolver
                         //
                         // Get load address and size.
                         //
-                        size = Marshal.SizeOf(typeof(MODULE_INFO));
+                        size = Marshal.SizeOf<MODULE_INFO>();
                         buffer = Marshal.AllocHGlobal(size);
                         if (buffer == nint.Zero)
                         {
@@ -239,7 +239,7 @@ namespace symbolresolver
                             continue;
                         }
 
-                        var modInfo = (MODULE_INFO)Marshal.PtrToStructure(buffer, typeof(MODULE_INFO))!;
+                        var modInfo = Marshal.PtrToStructure<MODULE_INFO>(buffer);
                         var baseAddress = modInfo.BaseOfDll;
                         var imageSize = modInfo.SizeOfImage;
                         Marshal.FreeHGlobal(buffer);

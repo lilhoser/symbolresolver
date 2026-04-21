@@ -96,7 +96,7 @@ namespace symbolresolver
             // Use Zw API to get full driver information including base and size.
             // For simplicity, we'll allocate a large enough buffer for 1024 drivers.
             //
-            var size = Marshal.SizeOf(typeof(SYSTEM_MODULE_INFORMATION)) * 1024;
+            var size = Marshal.SizeOf<SYSTEM_MODULE_INFORMATION>() * 1024;
             var buffer = Marshal.AllocHGlobal(size);
             if (buffer == nint.Zero)
             {
@@ -132,8 +132,7 @@ namespace symbolresolver
                     var pointer = nint.Add(buffer, 8); // aligned on 8-byte boundary
                     for (int i = 0; i < numModules; i++)
                     {
-                        var module = (SYSTEM_MODULE_INFORMATION)Marshal.PtrToStructure(
-                            pointer, typeof(SYSTEM_MODULE_INFORMATION))!;
+                        var module = Marshal.PtrToStructure<SYSTEM_MODULE_INFORMATION>(pointer);
                         if (string.IsNullOrEmpty(module.ImageName))
                         {
                             Trace(TraceLoggerType.Resolver,
@@ -195,7 +194,7 @@ namespace symbolresolver
                         });
 
                         pointer = nint.Add(pointer,
-                            Marshal.SizeOf(typeof(SYSTEM_MODULE_INFORMATION)));
+                            Marshal.SizeOf<SYSTEM_MODULE_INFORMATION>());
                     }
                     return true;
                 }

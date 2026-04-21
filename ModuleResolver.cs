@@ -118,7 +118,7 @@ namespace symbolresolver
                 ulong displacement = 0;
                 var symbol = new SYMBOL_INFO();
                 symbol.MaxNameLen = MAX_SYM_NAME;
-                symbol.SizeOfStruct = (uint)Marshal.SizeOf(typeof(SYMBOL_INFO));
+                symbol.SizeOfStruct = (uint)Marshal.SizeOf<SYMBOL_INFO>();
                 buffer = Marshal.AllocHGlobal((int)(symbol.SizeOfStruct + MAX_SYM_NAME));
                 if (buffer == nint.Zero)
                 {
@@ -141,7 +141,7 @@ namespace symbolresolver
                 }
                 else
                 {
-                    symbol = (SYMBOL_INFO)Marshal.PtrToStructure(buffer, typeof(SYMBOL_INFO))!;
+                    symbol = Marshal.PtrToStructure<SYMBOL_INFO>(buffer);
                     var nameLenCharacters = (int)symbol.NameLen; // not incl. null-term
                     if (nameLenCharacters == 0)
                     {
@@ -203,7 +203,7 @@ namespace symbolresolver
                 return false;
             }
 
-            Info.SizeOfStruct = (uint)Marshal.SizeOf(typeof(IMAGEHLP_MODULE64));
+            Info.SizeOfStruct = (uint)Marshal.SizeOf<IMAGEHLP_MODULE64>();
             var buffer = Marshal.AllocHGlobal((int)(Info.SizeOfStruct));
             if (buffer == nint.Zero)
             {
@@ -225,7 +225,7 @@ namespace symbolresolver
                           err);
                     return false;
                 }
-                Info = (IMAGEHLP_MODULE64)Marshal.PtrToStructure(buffer, typeof(IMAGEHLP_MODULE64))!;
+                Info = Marshal.PtrToStructure<IMAGEHLP_MODULE64>(buffer);
             }
             finally
             {
