@@ -21,7 +21,7 @@ using System.Text;
 
 namespace symbolresolver
 {
-    internal class NativeDefinitions
+    internal static partial class NativeDefinitions
     {
         public static uint SYMOPT_CASE_INSENSITIVE = 0x00000001;
         public static uint SYMOPT_UNDNAME = 0x00000002;
@@ -161,28 +161,31 @@ namespace symbolresolver
             public int Reserved;
         }
 
-        [DllImport("dbghelp.dll", EntryPoint="SymInitializeW", SetLastError = true, CharSet = CharSet.Unicode)]
+        [LibraryImport("dbghelp.dll", EntryPoint = "SymInitializeW", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool SymInitialize(
+        public static partial bool SymInitialize(
             nint hProcess,
-            [In()][MarshalAs(UnmanagedType.LPStr)] string UserSearchPath,
+            // Historically marshalled as LPStr even though we're calling the W variant.
+            // Preserving the wire format to avoid behaviour change; see issue discussion
+            // on the PR that introduced LibraryImport.
+            [MarshalAs(UnmanagedType.LPStr)] string UserSearchPath,
             [MarshalAs(UnmanagedType.Bool)] bool fInvadeProcess
             );
 
-        [DllImport("dbghelp.dll", EntryPoint="SymFromAddrW", SetLastError = true, CharSet = CharSet.Unicode)]
+        [LibraryImport("dbghelp.dll", EntryPoint = "SymFromAddrW", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool SymFromAddr(
+        public static partial bool SymFromAddr(
             nint hProcess,
             ulong Address,
             ref ulong Displacement,
             nint Symbol
             );
 
-        [DllImport("dbghelp.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        public static extern uint SymSetOptions(uint SymOptions);
+        [LibraryImport("dbghelp.dll", SetLastError = true)]
+        public static partial uint SymSetOptions(uint SymOptions);
 
-        [DllImport("dbghelp.dll", EntryPoint = "SymLoadModuleExW", SetLastError = true, CharSet = CharSet.Unicode)]
-        public static extern nint SymLoadModuleEx(
+        [LibraryImport("dbghelp.dll", EntryPoint = "SymLoadModuleExW", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
+        public static partial nint SymLoadModuleEx(
             nint hProcess,
             nint hFile,
             string ImageName,
@@ -192,73 +195,73 @@ namespace symbolresolver
             nint Data,
             uint Flags);
 
-        [DllImport("dbghelp.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        [LibraryImport("dbghelp.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool SymUnloadModule64(
+        public static partial bool SymUnloadModule64(
             nint hProcess,
             ulong BaseOfDll
             );
 
-        [DllImport("dbghelp.dll", EntryPoint = "SymEnumerateModulesW64", SetLastError = true, CharSet = CharSet.Unicode)]
+        [LibraryImport("dbghelp.dll", EntryPoint = "SymEnumerateModulesW64", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool SymEnumerateModules(
+        public static partial bool SymEnumerateModules(
             nint hProcess,
             SymbolEnumerateModulesCallback Callback,
             nint UserContext
             );
 
-        [DllImport("dbghelp.dll", EntryPoint = "SymGetModuleInfoW64", SetLastError = true, CharSet = CharSet.Unicode)]
+        [LibraryImport("dbghelp.dll", EntryPoint = "SymGetModuleInfoW64", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool SymGetModuleInfo(
+        public static partial bool SymGetModuleInfo(
             nint hProcess,
             ulong Address,
             nint ModuleInfo
             );
 
-        [DllImport("dbghelp.dll", EntryPoint="SymRegisterCallbackW64", SetLastError = true, CharSet = CharSet.Unicode)]
+        [LibraryImport("dbghelp.dll", EntryPoint = "SymRegisterCallbackW64", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool SymRegisterCallback64(
+        public static partial bool SymRegisterCallback64(
             nint hProcess,
             SymbolRegisteredCallback Callback,
             nint UserContext
             );
 
-        [DllImport("dbghelp.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        [LibraryImport("dbghelp.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool SymCleanup(nint hProcess);
+        public static partial bool SymCleanup(nint hProcess);
 
         //
         // Kernel32
         //
-        [DllImport("kernel32.dll", SetLastError = true)]
+        [LibraryImport("kernel32.dll", EntryPoint = "SetDllDirectoryW", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        static public extern bool SetDllDirectory(string lpPathName);
+        public static partial bool SetDllDirectory(string lpPathName);
 
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        public static extern nint OpenProcess(
+        [LibraryImport("kernel32.dll", SetLastError = true)]
+        public static partial nint OpenProcess(
             uint dwDesiredAccess,
             [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle,
             uint dwProcessId);
 
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        [LibraryImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool CloseHandle(nint hObject);
+        public static partial bool CloseHandle(nint hObject);
 
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        [LibraryImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool IsWow64Process(
+        public static partial bool IsWow64Process(
             nint hProcess,
-            [Out][MarshalAs(UnmanagedType.Bool)] out bool Wow64Process);
+            [MarshalAs(UnmanagedType.Bool)] out bool Wow64Process);
 
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        static public extern nint LoadLibraryEx(
-            [MarshalAs(UnmanagedType.LPWStr)] string lpFileName,
+        [LibraryImport("kernel32.dll", EntryPoint = "LoadLibraryExW", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
+        public static partial nint LoadLibraryEx(
+            string lpFileName,
             nint hFile,
             uint dwFlags);
 
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        [LibraryImport("kernel32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool FreeLibrary(nint hModule);
+        public static partial bool FreeLibrary(nint hModule);
 
         public const uint STANDARD_RIGHTS_REQUIRED = 0x000F0000;
         public const uint SYNCHRONIZE = 0x00100000;
@@ -286,9 +289,9 @@ namespace symbolresolver
             public nint EntryPoint;
         }
 
-        [DllImport("Psapi.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        [LibraryImport("Psapi.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool EnumProcessModulesEx(
+        public static partial bool EnumProcessModulesEx(
               nint hProcess,
               [Out] nint[] lphModule,
               int cb,
@@ -296,31 +299,31 @@ namespace symbolresolver
               EnumProcessModulesFilter dwFilterFlag
             );
 
-        [DllImport("Psapi.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        [LibraryImport("Psapi.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool EnumDeviceDrivers(
+        public static partial bool EnumDeviceDrivers(
               [Out] nint[] lpImageBase,
               int cb,
               out int lpcbNeeded
             );
 
-        [DllImport("Psapi.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        [LibraryImport("Psapi.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool GetModuleInformation(
+        public static partial bool GetModuleInformation(
               nint hProcess,
               nint hModule,
               nint lpModInfo,
               uint cb);
 
-        [DllImport("Psapi.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        public static extern uint GetModuleFileNameEx(
+        [LibraryImport("Psapi.dll", EntryPoint = "GetModuleFileNameExW", SetLastError = true)]
+        public static partial uint GetModuleFileNameEx(
               nint hProcess,
               nint hModule,
               nint lpFilename,
               int nSize);
 
-        [DllImport("Psapi.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-        public static extern uint GetDeviceDriverFileName(
+        [LibraryImport("Psapi.dll", EntryPoint = "GetDeviceDriverFileNameW", SetLastError = true)]
+        public static partial uint GetDeviceDriverFileName(
               nint ImageBase,
               nint lpFilename,
               int nSize);
@@ -394,8 +397,8 @@ namespace symbolresolver
             public string ImageName;
         }
 
-        [DllImport("ntdll.dll", SetLastError = true, CharSet = CharSet.Ansi)]
-        public static extern uint ZwQuerySystemInformation(
+        [LibraryImport("ntdll.dll", SetLastError = true)]
+        public static partial uint ZwQuerySystemInformation(
             SYSTEM_INFORMATION_CLASS SystemInformationClass,
             nint SystemInformation,
             uint SystemInformationLength,

@@ -4,8 +4,12 @@ symbolresolver is a .NET library that provides front-end access to Microsoft's d
 
 # Requirements
 * Windows 10+ or later operating system with debugging tools installed
-* .NET 9+ runtime
+* .NET 10+ runtime (v2.0.0+). Use symbolresolver 1.3.x for .NET 8/9.
 * Some features require administrator privileges
+
+# AOT / trimming
+
+Starting with v2.0.0, symbolresolver is marked `IsAotCompatible` and `IsTrimmable`, and all P/Invoke declarations use source-generated `[LibraryImport]` marshalling. If you call `SymEnumerateModules` or `SymRegisterCallback64` yourself, pass delegates that target *static* methods — lambdas that close over instance state force the runtime to synthesize a delegate thunk, which is not supported under Native AOT.
 
 # Using symbolresolver
 

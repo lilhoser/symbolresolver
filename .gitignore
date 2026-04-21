@@ -1,0 +1,25 @@
+# Build output
+bin/
+obj/
+artifacts/
+*.user
+*.rsuser
+*.suo
+
+# VS / Rider
+.vs/
+.idea/
+*.userprefs
+
+# Test results
+TestResults/
+*.trx
+*.coverage
+
+# Local nuget packages
+*.nupkg
+*.snupkg
+
+# OS
+Thumbs.db
+.DS_Store

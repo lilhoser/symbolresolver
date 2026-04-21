@@ -1,19 +1,26 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net10.0-windows7.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
     <GeneratePackageOnBuild>True</GeneratePackageOnBuild>
     <Authors>Aaron LeMasters</Authors>
     <Description>Resolve user and kernel mode addresses using Microsoft's dbghelp library.</Description>
     <PackageProjectUrl>https://github.com/lilhoser/symbolresolver</PackageProjectUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <RepositoryUrl>https://github.com/lilhoser/symbolresolver</RepositoryUrl>
-    <PackageTags>dbghelp;debugging;symbol;etw</PackageTags>
+    <PackageTags>dbghelp;debugging;symbol;etw;aot</PackageTags>
     <PackageLicenseFile>LICENSE</PackageLicenseFile>
     <PackageRequireLicenseAcceptance>True</PackageRequireLicenseAcceptance>
-    <Version>1.3.0</Version>
+    <AssemblyVersion>2.0.0</AssemblyVersion>
+    <FileVersion>2.0.0</FileVersion>
+    <Version>2.0.0</Version>
+    <PackageReleaseNotes>v2.0.0: Retarget to net10.0-windows7.0. Migrate all P/Invoke from [DllImport] to [LibraryImport] source-generated marshalling for AOT compatibility. Marked IsAotCompatible + IsTrimmable. Public-API preserved.</PackageReleaseNotes>
   </PropertyGroup>
 
   <ItemGroup>

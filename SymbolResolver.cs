@@ -189,8 +189,7 @@ namespace symbolresolver
                             }
                         case DbgHelpCallbackActionCode.CBA_DEFERRED_SYMBOL_LOAD_COMPLETE:
                             {
-                                var info = (IMAGEHLP_DEFERRED_SYMBOL_LOAD)Marshal.PtrToStructure(
-                                    data, typeof(IMAGEHLP_DEFERRED_SYMBOL_LOAD))!;
+                                var info = Marshal.PtrToStructure<IMAGEHLP_DEFERRED_SYMBOL_LOAD>(data);
                                 message += $"Symbols loaded for {info.FileName} " +
                                     $"(Checksum=0x{info.Checksum:X})" +
                                     $": Base=0x{info.BaseOfImage:X}, Flags=0x{info.Flags:X}";
@@ -198,8 +197,7 @@ namespace symbolresolver
                             }
                         case DbgHelpCallbackActionCode.CBA_DEFERRED_SYMBOL_LOAD_FAILURE:
                             {
-                                var info = (IMAGEHLP_DEFERRED_SYMBOL_LOAD)Marshal.PtrToStructure(
-                                    data, typeof(IMAGEHLP_DEFERRED_SYMBOL_LOAD))!;
+                                var info = Marshal.PtrToStructure<IMAGEHLP_DEFERRED_SYMBOL_LOAD>(data);
                                 message += $"Symbol load failed for {info.FileName} " +
                                     $"(Checksum=0x{info.Checksum:X})" +
                                     $": Base=0x{info.BaseOfImage:X}, Flags=0x{info.Flags:X}";
